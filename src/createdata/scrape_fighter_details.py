@@ -178,8 +178,8 @@ class FighterDetailsScraper:
 
         df = (
             pd.DataFrame(fighter_name_and_details)
-            .T.replace("--", value=np.NaN)
-            .replace("", value=np.NaN)
+            .T.replace("--", value=np.nan)
+            .replace("", value=np.nan)
         )
         df.columns = self.HEADER
 

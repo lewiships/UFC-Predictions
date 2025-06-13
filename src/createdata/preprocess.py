@@ -380,9 +380,13 @@ class Preprocessor:
         self.store.to_csv(filepath, index=False)
 
     def _fill_nas(self):
-        self.store["R_Reach_cms"].fillna(self.store["R_Height_cms"], inplace=True)
-        self.store["B_Reach_cms"].fillna(self.store["B_Height_cms"], inplace=True)
-        self.store.fillna(self.store.median(), inplace=True)
+        #self.store["R_Reach_cms"].fillna(self.store["R_Height_cms"], inplace=True)
+        #self.store["B_Reach_cms"].fillna(self.store["B_Height_cms"], inplace=True)
+        self.store["R_Reach_cms"] = self.store["R_Reach_cms"].fillna(self.store["R_Height_cms"])
+        self.store["B_Reach_cms"] = self.store["B_Reach_cms"].fillna(self.store["B_Height_cms"])
+        numeric_cols = self.store.select_dtypes(include='number').columns
+        self.store[numeric_cols] = self.store[numeric_cols].fillna(self.store[numeric_cols].median())
+        #self.store.fillna(self.store.median(), inplace=True)
 
         self.store["R_Stance"].fillna("Orthodox", inplace=True)
         self.store["B_Stance"].fillna("Orthodox", inplace=True)

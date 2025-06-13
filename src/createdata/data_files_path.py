@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 
-BASE_PATH = Path(os.getcwd()) / "data"
+#BASE_PATH = Path(os.getcwd()) / "data"
+BASE_PATH = Path(__file__).resolve().parent.parent / "data"
+print(BASE_PATH)
 EVENT_AND_FIGHT_LINKS_PICKLE = BASE_PATH / "event_and_fight_links.pickle"
 PAST_EVENT_LINKS_PICKLE = BASE_PATH / "past_event_links.pickle"
 PAST_FIGHTER_LINKS_PICKLE = BASE_PATH / "past_fighter_links.pickle"
