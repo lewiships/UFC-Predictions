@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 import pandas as pd
-
+from difflib import SequenceMatcher
 from src.createdata.preprocess_fighter_data import FighterDetailProcessor
 
 from src.createdata.data_files_path import (  # isort:skip
@@ -12,23 +12,19 @@ from src.createdata.data_files_path import (  # isort:skip
     UFC_DATA,
 )
 
-
 class Preprocessor:
     def __init__(self):
         self.FIGHTER_DETAILS_PATH = FIGHTER_DETAILS
         self.TOTAL_EVENT_AND_FIGHTS_PATH = TOTAL_EVENT_AND_FIGHTS
         self.PREPROCESSED_DATA_PATH = PREPROCESSED_DATA
         self.UFC_DATA_PATH = UFC_DATA
-        self.fights = None
-        self.fighter_details = None
-        self.store = None
-
-    def process_raw_data(self):
         print("Reading Files")
         self.fights, self.fighter_details = self._read_files()
+        self.store = None
+        self.processed_fights = None
 
-        print("Drop columns that contain information not yet occurred")
-        self._drop_future_fighter_details_columns()
+    def preprocess_fights_for_prediction(self, filtered_fights):
+        self.fights = filtered_fights
 
         print("Renaming Columns")
         self._rename_columns()
@@ -36,22 +32,50 @@ class Preprocessor:
 
         print("Converting Percentages to Fractions")
         self._convert_percentages_to_fractions()
-        self._create_title_bout_feature()
+        self.fights = self.create_title_bout_feature(self.fights)
         self._create_weight_classes()
         self._convert_last_round_to_seconds()
         self._convert_CTRL_to_seconds()
         self._get_total_time_fought()
         self.store = self._store_compiled_fighter_data_in_another_DF()
         self._create_winner_feature()
-        self._create_fighter_attributes()
-        self._create_fighter_age()
-        self._save(filepath=self.UFC_DATA_PATH)
+        self.processed_fights = self._one_hot_encode_win()
+
+        return self.processed_fights
+
+
+    def process_raw_data(self, ewm_span=4, ewm_adjust=False):
+        """ """
+
+        # Process Fights DF
+        print("Renaming Columns")
+        self._rename_columns()
+        self._replacing_winner_nans_draw()
+        print("Converting Percentages to Fractions")
+        self._convert_percentages_to_fractions()
+        self.fights = self.create_title_bout_feature(self.fights)
+        self._create_weight_classes()
+        self._convert_last_round_to_seconds()
+        self._convert_CTRL_to_seconds()
+        self._get_total_time_fought()
+        self.store = self._store_compiled_fighter_data_in_another_DF()
+        self._create_winner_feature()
+        self.processed_fights = self._one_hot_encode_win()
+
+        # Process Fighter Details DF
+        self.fighter_details_processor = FighterDetailProcessor(self.processed_fights, self.fighter_details) # Initialise fighter details processor
+        self._process_fighter_details() # Clean the fighter details df
+
+        # Generate new columns and merge DataFrames
+        self._create_and_add_fighter_attributes(ewm_span=ewm_span, ewm_adjust=ewm_adjust)
+        # Creating Age Column (dependent on both DFs)
+        self.store = self.create_fighter_age(self.store)
+        self._save(self.store, filepath=self.UFC_DATA_PATH)
 
         print("Fill NaNs")
-        self._fill_nas()
-        print("Dropping Non Essential Columns")
-        self._drop_non_essential_cols()
-        self._save(filepath=self.PREPROCESSED_DATA_PATH)
+        self.store = self._fill_nas(self.store) # operates on self.store
+        self.store = self._drop_non_essential_cols(self.store) # operates on self.store
+        self._save(self.store, filepath=self.PREPROCESSED_DATA_PATH)
         print("Successfully preprocessed and saved ufc data!\n")
 
     def _read_files(self):
@@ -71,20 +95,7 @@ class Preprocessor:
 
         return fights_df, fighter_details_df
 
-    def _drop_future_fighter_details_columns(self):
-        self.fighter_details.drop(
-            columns=[
-                "SLpM",
-                "Str_Acc",
-                "SApM",
-                "Str_Def",
-                "TD_Avg",
-                "TD_Acc",
-                "TD_Def",
-                "Sub_Avg",
-            ],
-            inplace=True,
-        )
+
 
     def _rename_columns(self):
         columns = [
@@ -122,7 +133,7 @@ class Preprocessor:
         self.fights.drop(columns, axis=1, inplace=True)
 
     def _replacing_winner_nans_draw(self):
-        self.fights["Winner"].fillna("Draw", inplace=True)
+        self.fights["Winner"] = self.fights["Winner"].fillna("Draw")
 
     def _convert_percentages_to_fractions(self):
         pct_columns = ["R_SIG_STR_pct", "B_SIG_STR_pct", "R_TD_pct", "B_TD_pct"]
@@ -138,10 +149,12 @@ class Preprocessor:
         for column in pct_columns:
             self.fights[column] = self.fights[column].apply(pct_to_frac)
 
-    def _create_title_bout_feature(self):
-        self.fights["title_bout"] = self.fights["Fight_type"].apply(
+    def create_title_bout_feature(self, df):
+        df["title_bout"] = df["Fight_type"].apply(
             lambda X: True if "Title Bout" in X else False
         )
+
+        return df
 
     def _create_weight_classes(self):
         def make_weight_class(X):
@@ -271,8 +284,9 @@ class Preprocessor:
             get_total_time, axis=1
         )
         self.fights.drop(
-            ["Format", "Fight_type", "last_round_time"], axis=1, inplace=True
+            ["Format", "last_round_time"], axis=1, inplace=True
         )
+        self.fights.drop(["Fight_type"], axis=1, inplace=True)
 
     def _store_compiled_fighter_data_in_another_DF(self):
         store = self.fights.copy()
@@ -337,27 +351,54 @@ class Preprocessor:
 
     def _create_winner_feature(self):
         def get_renamed_winner(row):
-            if row["R_fighter"] == row["Winner"]:
-                return "Red"
+            r_fighter = row["R_fighter"]
+            b_fighter = row["B_fighter"]
+            winner = row["Winner"]
 
-            elif row["B_fighter"] == row["Winner"]:
+            if winner == "Draw":
+                return "Draw"
+
+            # Exact match check first
+            if winner == r_fighter:
+                return "Red"
+            if winner == b_fighter:
                 return "Blue"
 
-            elif row["Winner"] == "Draw":
-                return "Draw"
+            # Fuzzy matching
+            def similarity(a, b):
+                return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+            sim_r = similarity(winner, r_fighter)
+            sim_b = similarity(winner, b_fighter)
+
+            threshold = 0.8
+
+            if sim_r >= threshold and sim_r >= sim_b:
+                print(f"[INFO] Fuzzy match accepted: Winner '{winner}' ≈ R_fighter '{r_fighter}' (sim={sim_r:.2f})")
+                return "Red"
+
+            if sim_b >= threshold and sim_b > sim_r:
+                print(f"[INFO] Fuzzy match accepted: Winner '{winner}' ≈ B_fighter '{b_fighter}' (sim={sim_b:.2f})")
+                return "Blue"
+
+            # If not resolved
+            raise ValueError(f"Unable to resolve winner for: {row}")
 
         self.store["Winner"] = self.store[["R_fighter", "B_fighter", "Winner"]].apply(
             get_renamed_winner, axis=1
         )
+    def _process_fighter_details(self):
+        self.fighter_details_processor.clean_fighter_details()
 
-    def _create_fighter_attributes(self):
-        frame = FighterDetailProcessor(self.fights, self.fighter_details).frame
+    def _create_and_add_fighter_attributes(self, ewm_span=4, ewm_adjust=False):
+        self.fighter_details_processor.generate_fighter_stats_columns(ewm_span, ewm_adjust)
+        frame = self.fighter_details_processor.frame
         self.store = self.store.join(frame, how="outer")
 
-    def _create_fighter_age(self):
-        self.store["R_DOB"] = pd.to_datetime(self.store["R_DOB"])
-        self.store["B_DOB"] = pd.to_datetime(self.store["B_DOB"])
-        self.store["date"] = pd.to_datetime(self.store["date"])
+    def create_fighter_age(self, df):
+        df["R_DOB"] = pd.to_datetime(df["R_DOB"])
+        df["B_DOB"] = pd.to_datetime(df["B_DOB"])
+        df["date"] = pd.to_datetime(df["date"])
 
         def get_age(row):
             B_age = (row["date"] - row["B_DOB"]).days
@@ -371,45 +412,71 @@ class Preprocessor:
 
             return pd.Series([B_age, R_age], index=["B_age", "R_age"])
 
-        self.store[["B_age", "R_age"]] = self.store[["date", "R_DOB", "B_DOB"]].apply(
+        df[["B_age", "R_age"]] = df[["date", "R_DOB", "B_DOB"]].apply(
             get_age, axis=1
         )
-        self.store.drop(["R_DOB", "B_DOB"], axis=1, inplace=True)
+        df.drop(["R_DOB", "B_DOB"], axis=1, inplace=True) #Drop DOB now we have age.
+        return df
 
-    def _save(self, filepath):
-        self.store.to_csv(filepath, index=False)
+    def _save(self, df, filepath):
+        df.to_csv(filepath, index=False)
 
-    def _fill_nas(self):
+    def _fill_nas(self, df):
         #self.store["R_Reach_cms"].fillna(self.store["R_Height_cms"], inplace=True)
         #self.store["B_Reach_cms"].fillna(self.store["B_Height_cms"], inplace=True)
-        self.store["R_Reach_cms"] = self.store["R_Reach_cms"].fillna(self.store["R_Height_cms"])
-        self.store["B_Reach_cms"] = self.store["B_Reach_cms"].fillna(self.store["B_Height_cms"])
-        numeric_cols = self.store.select_dtypes(include='number').columns
-        self.store[numeric_cols] = self.store[numeric_cols].fillna(self.store[numeric_cols].median())
+        df["R_Reach_cms"] = df["R_Reach_cms"].fillna(df["R_Height_cms"])
+        df["B_Reach_cms"] = df["B_Reach_cms"].fillna(df["B_Height_cms"])
+        numeric_cols = df.select_dtypes(include='number').columns
+        df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
         #self.store.fillna(self.store.median(), inplace=True)
 
-        self.store["R_Stance"].fillna("Orthodox", inplace=True)
-        self.store["B_Stance"].fillna("Orthodox", inplace=True)
+        df["R_Stance"] = df["R_Stance"].fillna("Orthodox")
+        df["B_Stance"] = df["B_Stance"].fillna("Orthodox")
+        return df
 
-    def _drop_non_essential_cols(self):
-        self.store.drop(self.store.index[self.store["Winner"] == "Draw"], inplace=True)
-        self.store = pd.concat(
-            [
-                self.store,
-                pd.get_dummies(self.store[["weight_class", "B_Stance", "R_Stance"]]),
-            ],
+    def _drop_non_essential_cols(self, df):
+
+        if "Winner" in df.columns:
+            df.drop(df.index[df["Winner"] == "Draw"], inplace=True)
+
+        # Force all stance categories before one-hot encoding
+        all_stances = ["Orthodox", "Southpaw", "Switch", "Sideways", "Open Stance"]
+        for col in ["B_Stance", "R_Stance"]:
+            if col in df.columns:
+                df[col] = pd.Categorical(df[col], categories=all_stances)
+
+        # Force all weight class categories before one-hot encoding
+        all_weight_classes = [
+            "Flyweight", "Bantamweight", "Featherweight", "Lightweight",
+            "Welterweight", "Middleweight", "LightHeavyweight", "Heavyweight",
+            "WomenStrawweight", "WomenFlyweight", "WomenBantamweight", "WomenFeatherweight",
+            "CatchWeight", "OpenWeight"
+        ]
+        if "weight_class" in df.columns:
+            df["weight_class"] = pd.Categorical(df["weight_class"], categories=all_weight_classes)
+
+        # One-hot encode ensuring *all possible categories* are included
+        cols_to_encode = [col for col in ["weight_class", "B_Stance", "R_Stance"] if col in df.columns]
+        if cols_to_encode:
+            df = pd.concat([df, pd.get_dummies(df[cols_to_encode])], axis=1)
+
+        cols_to_drop = [
+            "weight_class",
+            "B_Stance",
+            "R_Stance",
+            "Referee",
+            "location",
+            "date",
+            "R_fighter",
+            "B_fighter",
+        ]
+        df.drop(columns=[col for col in cols_to_drop if col in df.columns], inplace=True)
+        return df
+
+    def _one_hot_encode_win(self):
+        self.fights = pd.concat(
+            [self.fights, pd.get_dummies(self.fights["win_by"], prefix="win_by")],
             axis=1,
         )
-        self.store.drop(
-            columns=[
-                "weight_class",
-                "B_Stance",
-                "R_Stance",
-                "Referee",
-                "location",
-                "date",
-                "R_fighter",
-                "B_fighter",
-            ],
-            inplace=True,
-        )
+        self.fights.drop(["win_by"], axis=1, inplace=True)
+        return self.fights

@@ -22,7 +22,7 @@ CSE_ID = "enter_id_here"
 fighter_df = pd.read_csv("app_data/latest_fighter_stats.csv", index_col="index")
 weight_classes = pd.read_csv("app_data/weight_classes.csv")
 
-with open("app_data/model.sav", "rb") as mdl:
+with open(r"C:\Users\lewis\repos\UFC-Predictions\saved_models\model_24_06_25.sav", "rb") as mdl:
     model = pickle.load(mdl)
 
 with open("app_data/cols.list", "rb") as c:

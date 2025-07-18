@@ -1,0 +1,29 @@
+1) Data scraping - obtain a data frame with unprocessed
+    data as exists on the UFC website.
+2) Preprocessing - Pass this data frame through the preprocessor to obtain
+    a clean data frame. (More on this)
+3) Add any additional data - Anything that doesn't come from the UFC website,
+    i.e. any more data I can find/create.
+4) Train model - Split into train/test, evaluate. Can train a few different types
+    of model, i.e. random forest, neural network etc.
+5) Use trained model to predict fights. Need to write a fight-preprocessor.
+    This will take two fighter names and a date, then create the features for the model.
+
+Notes --
+Can automate an excel file that records predictions vs results,
+    can scrape betting odds and give the model some fake money to work with.
+
+If I can get backdated betting odds I can train the model to make bets rather
+    than just predict the winner.
+
+Alternatively I can use RL with money as the reward to train many models to make bets.
+    The prediction of the original model can just be an input with a certainty value?
+Preprocessing steps --
+    Input = dirty_df
+    1) Extract the career-wide fighter stats to prevent leakage and allow later recency-weighting.
+    2) Split landed of attempted to different columns.
+    3) Replace Winner NaN as Draw? Double check this step, can use a similarity function to determine if there is actually a winner.
+        - this step removes could not continue, draws and overturned.
+    4) Convert percentages to decimal
+    5) Create a title_bout feature and weight class.
+    6) Create total time fought
